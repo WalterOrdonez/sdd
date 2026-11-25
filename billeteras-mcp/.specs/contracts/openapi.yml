@@ -1,0 +1,205 @@
+openapi: 3.0.3
+info:
+  title: Wallet Transfers API
+  version: 1.0.0
+  description: >
+    Contratos de transferencias entre billeteras.
+    SPEC-001: transferencia misma moneda. SPEC-002: transferencia con conversión.
+
+paths:
+  /wallets/{walletId}:
+    get:
+      summary: Consultar saldo de una billetera
+      operationId: getWalletBalance
+      parameters:
+        - name: walletId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Saldo actual y disponible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletBalance'
+        '422':
+          description: Billetera inexistente o inactiva
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResult' }
+
+  /transfers:
+    post:
+      summary: Transferencia entre billeteras de la misma moneda (SPEC-001)
+      operationId: createTransfer
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '201':
+          description: Transferencia completada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResult'
+        '409':
+          description: Conflicto de idempotencia
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResult' }
+        '422':
+          description: Regla de negocio incumplida
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResult' }
+
+  /fx-transfers:
+    post:
+      summary: Transferencia entre billeteras con conversión de moneda (SPEC-002)
+      operationId: createFxTransfer
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FxTransferRequest'
+      responses:
+        '201':
+          description: Transferencia con conversión completada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FxTransferResult'
+        '409':
+          description: Conflicto de idempotencia
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResult' }
+        '422':
+          description: Regla de negocio incumplida (incluye QUOTE_EXPIRED)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResult' }
+
+  /fx-quotes:
+    post:
+      summary: Congelar una tasa de cambio (vigencia ≤ 60s)
+      operationId: createFxQuote
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FxQuoteRequest'
+      responses:
+        '201':
+          description: Tasa congelada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FxQuote' }
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string }
+
+  schemas:
+    Currency:
+      type: string
+      enum: [USD, EUR, COP]
+      description: Código ISO 4217 soportado.
+
+    WalletBalance:
+      type: object
+      required: [walletId, currency, balanceMinor, availableMinor]
+      properties:
+        walletId:       { type: string }
+        currency:       { $ref: '#/components/schemas/Currency' }
+        balanceMinor:   { type: integer, description: Saldo total en unidades menores }
+        availableMinor: { type: integer, description: Saldo disponible en unidades menores }
+
+    FxQuoteRequest:
+      type: object
+      required: [from, to, amountMinor]
+      properties:
+        from:        { $ref: '#/components/schemas/Currency' }
+        to:          { $ref: '#/components/schemas/Currency' }
+        amountMinor: { type: integer, minimum: 1, description: Monto en moneda origen }
+
+    TransferRequest:
+      type: object
+      required: [fromWalletId, toWalletId, amountMinor, currency]
+      properties:
+        fromWalletId: { type: string }
+        toWalletId:   { type: string }
+        amountMinor:  { type: integer, minimum: 1, description: Monto en la menor unidad }
+        currency:     { $ref: '#/components/schemas/Currency' }
+
+    TransferResult:
+      type: object
+      properties:
+        transferId:       { type: string }
+        status:           { type: string, enum: [COMPLETADA] }
+        fromBalanceMinor: { type: integer }
+        toBalanceMinor:   { type: integer }
+
+    FxTransferRequest:
+      type: object
+      required: [fromWalletId, toWalletId, amountMinor, quoteId]
+      properties:
+        fromWalletId: { type: string }
+        toWalletId:   { type: string }
+        amountMinor:  { type: integer, minimum: 1, description: Monto en moneda origen }
+        quoteId:      { type: string, description: FxQuote previamente congelada }
+
+    FxTransferResult:
+      type: object
+      properties:
+        transferId:    { type: string }
+        status:        { type: string, enum: [COMPLETADA] }
+        debitedMinor:  { type: integer, description: En moneda origen }
+        creditedMinor: { type: integer, description: En moneda destino }
+        rate:          { type: number }
+
+    FxQuote:
+      required: [quoteId, from, to, rate, issuedAt, expiresAt, amountMinor, estimatedAmountMinor]
+      type: object
+      properties:
+        quoteId:   { type: string }
+        from:      { $ref: '#/components/schemas/Currency' }
+        to:        { $ref: '#/components/schemas/Currency' }
+        rate:      { type: number, description: Positivo }
+        issuedAt:  { type: integer, format: int64, description: epoch ms (reloj servidor) }
+        expiresAt: { type: integer, format: int64, description: issuedAt + ≤ 60000 }
+        amountMinor:          { type: integer, description: Monto original en unidades menores }
+        estimatedAmountMinor: { type: integer, description: Estimación calculada por la API }
+
+    ErrorResult:
+      type: object
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_AMOUNT
+            - UNSUPPORTED_CURRENCY
+            - WALLET_NOT_FOUND
+            - SAME_WALLET
+            - CURRENCY_MISMATCH
+            - INSUFFICIENT_FUNDS
+            - QUOTE_EXPIRED
+            - IDEMPOTENCY_CONFLICT
+            - INTERNAL
+        message:
+          type: string
+          description: Mensaje sin detalles internos.
